@@ -5,12 +5,12 @@ Silent Hill Origins PS2 Model Texture Noesis Plugin.
 
 *.txd texture file. 
 
-The game uses the RenderWare engine. 
+The game use the RenderWare engine. 
 
 # Usage
-Put the *.py script in the Noesis\plugin\python directory. 
+Put the *.py script to the Noesis\plugin\python directory. 
 
-*.bms is quickbms a script. Used to split RenderWare resource files. 
+*.bms is quickbms a script. Used for split RenderWare resource files. 
 
 About Noesis: 
 http://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91 
