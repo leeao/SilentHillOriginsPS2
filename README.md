@@ -11,7 +11,8 @@ The game use the RenderWare engine.
 Put the *.py script to the Noesis\plugin\python directory. 
 
 *.bms is a quickbms script. Used for split RenderWare resource files. 
-ARC archive unpacking script:
+
+.ARC archive unpacking script:
 http://aluigi.org/bms/silent_hill_origins.bms 
 
 About Noesis: 
