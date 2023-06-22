@@ -1,9 +1,10 @@
 # Silent Hill Origins PS2
 Silent Hill Origins PS2 Model Texture Noesis Plugin. 
 
-*.dff model file. 
-
-*.txd texture file. 
+Support:
+*.dff model file. Support Delta Morph.
+*.txd texture file.
+*.anm animation file.
 
 The game use the RenderWare engine. 
 
