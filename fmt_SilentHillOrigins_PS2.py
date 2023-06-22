@@ -1,8 +1,13 @@
-#Silent Hill Origins DFF Models and TXD Textures Noesis Importer
-#RenderWare Version 3.7.0.2 (0x1C020065)
-#By Allen
+# Silent Hill Origins DFF Models and TXD Textures Noesis Importer
+# RenderWare Version 3.7.0.2 (0x1C020065)
+# By Allen
+
+LoadAnimation   = True          # Load ANM Animation
+LoadDeltaMorph  = True          # Load Delta Morph
+
 from inc_noesis import *
 import struct
+
 def registerNoesisTypes():
 	handle = noesis.register("Silent Hill Origins PS2 DFF Models", ".dff;.rws")
 	noesis.setHandlerTypeCheck(handle, noepyCheckType)
@@ -227,6 +232,20 @@ class rClump(object):
                             matList.append(material)                    
                     mdl.setModelMaterials(NoeModelMaterials(texList,matList))
                     mdl.setBones(skinBones)
+
+                    anims = []                         
+                    if LoadAnimation:
+                        path = os.path.dirname(rapi.getInputName())
+                        # print(path)
+                        anmFiles = get_ext_file(path,"anm")
+                        for anmFile in anmFiles:
+                            anmName = os.path.basename(anmFile)[:-4] # Filename without extension
+                            animData = rapi.loadIntoByteArray(anmFile)                        
+                            if animData:                        
+                                anims.append(LoadAnims(animData, anmName, skinBones))
+                        if anims:
+                            mdl.setAnims(anims)
+
                     self.mdlList.append(mdl)
                     #rapi.rpgReset()  
             else:
@@ -239,6 +258,117 @@ class rClumpStruct(object):
                 self.numAtomics = bs.readUInt()
                 self.numLights = bs.readUInt()
                 self.numCameras = bs.readUInt()
+
+def get_ext_file(dir_path,extension):
+    file_list = []
+    for root, dirs, files in os.walk(dir_path):
+        for file in files:
+            if file.endswith(extension): # ext like ".anm"
+                file_list.append(os.path.join(root, file))
+    return file_list
+
+# Create kf bone
+def createKfBone(boneIndex, posKfs, rotKfs):
+    kfBone = NoeKeyFramedBone(boneIndex)
+    if (rotKfs):
+        kfBone.setRotation(rotKfs, noesis.NOEKF_ROTATION_QUATERNION_4,noesis.NOEKF_INTERPOLATE_LINEAR)
+    if (posKfs):
+        kfBone.setTranslation(posKfs, noesis.NOEKF_TRANSLATION_VECTOR_3,noesis.NOEKF_INTERPOLATE_LINEAR)
+    return kfBone
+
+def readAnimType0x1103(bs,Frames):
+
+    transOffset = NoeVec3.fromBytes(bs.readBytes(12))
+    transScalar = NoeVec3.fromBytes(bs.readBytes(12))
+    frameHdrBaseOfs = bs.tell()
+    keyDataBaseOfs = bs.tell() + Frames * 8
+    keyFrames = []
+    
+    for i in range(Frames):
+        bs.seek(frameHdrBaseOfs + i * 8)
+        kf = rwKeyFrame()
+        kf.currentFrameHdrOfs = bs.tell()
+        kf.currentID = (bs.tell() - frameHdrBaseOfs) // 8
+        kf.prevFrame = bs.readInt()
+        kf.time = bs.readFloat()
+        kf.prevFrameID = kf.currentID - (kf.prevFrame // 20)
+        kf.prevFrameHdrOfs = frameHdrBaseOfs + kf.prevFrameID * 8        
+        
+        bs.seek(keyDataBaseOfs + i * 12)
+        RotCompressed1 = bs.readUInt()
+        RotCompressed2 = bs.readUShort()
+        qx = ((RotCompressed1 >> 20) - 2048.0 ) / 2047.0
+        qy = (((RotCompressed1 >> 8) & 0xFFF) - 2048.0 ) / 2047.0
+        qz =(((( RotCompressed1 * 16) & 0xFFF)|(RotCompressed2 >> 12)) - 2048.0 ) / 2047.0
+        qw = ((RotCompressed2 & 0xFFF) - 2048.0 ) / 2047.0 
+        #conjugate -qx -qy -qz qw
+        kf.quat = NoeQuat([-qx,-qy,-qz,qw])
+        #kf.quat = NoeQuat([qx,qy,qz,qw]).transpose()
+        tx = (bs.readUShort() / 65535.0) * transScalar[0] + transOffset[0] 
+        ty = (bs.readUShort() / 65535.0) * transScalar[1] + transOffset[1] 
+        tz = (bs.readUShort() / 65535.0) * transScalar[2] + transOffset[2] 
+        kf.trans = NoeVec3([tx,ty,tz])
+        keyFrames.append(kf)
+
+    numNodes = animGetNumNodes(keyFrames)
+    
+    rotKfs = []
+    posKfs = [] 
+    kfBones = []
+    for i in range(Frames):
+        prevID = keyFrames[i].prevFrameID
+        if i < numNodes:
+            keyFrames[i].nodeID = i
+        else:
+            keyFrames[i].nodeID = keyFrames[prevID].nodeID
+            keyFrames[prevID].nextFrameID = i
+
+    for i in range(numNodes): 
+        posKfs, rotKfs = [], []
+        
+        for j in range(Frames):
+            kf = keyFrames[j]
+            if kf.nodeID == i:
+                rotKfs.append(NoeKeyFramedValue(kf.time, kf.quat))    
+                posKfs.append(NoeKeyFramedValue(kf.time, kf.trans))
+        kfBones.append(createKfBone(i, posKfs, rotKfs))
+    return kfBones
+
+def LoadAnims(data, animName, bones):
+    bs = NoeBitStream(data)
+    hAnim = rwChunk(bs)
+    if hAnim.chunkID == 0x1B:
+        Version = bs.readInt()
+        TypeID = bs.readInt()
+        Frames = bs.readInt()
+        Flags = bs.readInt()
+        Duration = bs.readFloat()
+        framerate = 30
+        if TypeID == 0x1103:
+            kfBones = readAnimType0x1103(bs,Frames)
+        return NoeKeyFramedAnim(animName, bones, kfBones, framerate)
+
+
+def animGetNumNodes(keyFrames):
+    first =  keyFrames[0].currentFrameHdrOfs
+    index = 0
+    while(keyFrames[index].prevFrameHdrOfs!=first):
+        index += 1
+    return index
+
+class rwKeyFrame(object):
+    def __init__(self):
+        self.prevFrame = 0
+        self.prevFrameHdrOfs = 0
+        self.prevFrameID = 0
+        self.time = 0.0
+        self.currentFrameHdrOfs = 0
+        self.currentID = 0        
+        self.nodeID = 0
+        self.nextFrameID = -1
+        self.quat = NoeQuat()
+        self.trans = NoeVec3()
+
 class rFrameList(object):
         def __init__(self,datas):
                 self.bs = NoeBitStream(datas)                
@@ -726,6 +856,79 @@ def getNormal(normalData):
         out.writeFloat(ny)
         out.writeFloat(nz)        
     return out.getBuffer()
+
+
+class rDeltaMorphPLG(object):
+    def __init__(self,datas,vertTransMatrix,baseVertices,baseNormals):
+        self.bs = NoeBitStream(datas)
+        self.baseVertices = baseVertices
+        self.baseNormals = baseNormals
+        self.boneMatrix = vertTransMatrix
+    def readMorph(self):
+        targetCount = self.bs.readUInt()
+        for i in range(targetCount):
+            vertexBuffer = self.baseVertices
+            normalBuffer = self.baseNormals
+            nameLen = self.bs.readInt()
+            morphName = str(self.bs.readBytes(nameLen), "ASCII").rstrip("\0")
+            flags = self.bs.readInt()
+            unknown = self.bs.readInt()    
+            mappingLength = self.bs.readUInt()
+            morphVertexCount = self.bs.readUInt()
+            vertBufferBaseOffset = self.bs.tell() + mappingLength
+            normalBufferBaseOffset = vertBufferBaseOffset + morphVertexCount * 12
+            endOffset = normalBufferBaseOffset
+            if flags & 0x10:
+                endOffset += morphVertexCount * 12
+            
+            mappingBaseOffset =  self.bs.tell() 
+            currentVertexIndex = 0
+            currentMorphVertIndex = 0
+            morphVertexBuffer = bytes()
+            morphNormalBuffer = bytes()
+            numMorphVert = 0
+            for j in range(mappingLength):
+                self.bs.seek(mappingBaseOffset + j)
+                flag = self.bs.readUByte()
+                numMorphVert += flag & 0x7f
+                if (flag & 0x80):
+                    useCount = flag & 0x7F
+
+                    for v in range(useCount):
+                        curVertIdx = currentVertexIndex + v
+                        curMorphVertIdx = currentMorphVertIndex + v
+                        baseVert = NoeVec3.fromBytes(vertexBuffer[curVertIdx*12:curVertIdx*12+12])
+                        self.bs.seek(vertBufferBaseOffset + curMorphVertIdx * 12)
+                        morphVert = baseVert + (NoeVec3.fromBytes(self.bs.readBytes(12)) * self.boneMatrix)
+                        morphVertexBuffer += morphVert.toBytes()
+                        if flags & 0x10 :
+                            baseNormal = NoeVec3.fromBytes(normalBuffer[curVertIdx*12:curVertIdx*12+12])
+                            self.bs.seek(normalBufferBaseOffset + curMorphVertIdx * 12)
+                            morphNormal = baseNormal + NoeVec3.fromBytes(self.bs.readBytes(12)) * self.boneMatrix
+                            morphNormalBuffer += morphNormal.toBytes()
+
+                    currentVertexIndex += useCount
+                    currentMorphVertIndex += useCount
+                else:
+                    unuseCount = flag & 0x7F
+                    for v in range(unuseCount):
+                        curVertIdx = currentVertexIndex + v
+                        baseVert = NoeVec3.fromBytes(vertexBuffer[curVertIdx*12:curVertIdx*12+12])
+                        morphVertexBuffer += baseVert.toBytes()
+                        if flags & 0x10 :
+                            baseNormal = NoeVec3.fromBytes(normalBuffer[curVertIdx*12:curVertIdx*12+12])
+                            morphNormalBuffer += baseNormal.toBytes()
+                    currentVertexIndex += unuseCount
+            
+            rapi.rpgFeedMorphTargetPositions(morphVertexBuffer, noesis.RPGEODATA_FLOAT, 12)
+            if flags & 0x10:
+                rapi.rpgFeedMorphTargetNormals(morphNormalBuffer, noesis.RPGEODATA_FLOAT, 12)
+            rapi.rpgCommitMorphFrame(numMorphVert)
+            self.bs.seek(endOffset)
+            XYZ_Rad = NoeVec4.fromBytes(self.bs.readBytes(16))
+        rapi.rpgCommitMorphFrameSet()
+
+
 class rGeomtry(object):
         def __init__(self,datas,vertMat):
                 self.bs = NoeBitStream(datas)
@@ -808,11 +1011,15 @@ class rGeomtry(object):
                 haveSkin = 0
                 haveBinMesh = 0
                 haveNavtiveMesh = 0
+                haveDeltaMorph = 0
                 while self.bs.tell()<geoExtEndOfs:
                         header = rwChunk(self.bs)
                         if header.chunkID == 0x50e:
                                 haveBinMesh = 1
-                                binMeshDatas = self.bs.readBytes(header.chunkSize)                    
+                                binMeshDatas = self.bs.readBytes(header.chunkSize) 
+                        elif header.chunkID == 0x122:
+                                haveDeltaMorph = 1
+                                deltaMorphDatas = self.bs.readBytes(header.chunkSize)                                                       
                         elif header.chunkID == 0x116:
                                 haveSkin = 1
                                 skinDatas = self.bs.readBytes(header.chunkSize)
@@ -821,6 +1028,9 @@ class rGeomtry(object):
                                 nativeDatas = self.bs.readBytes(header.chunkSize)                                
                         else:
                              self.bs.seek(header.chunkSize,1)
+                if haveDeltaMorph and LoadDeltaMorph:
+                        deltaMorph = rDeltaMorphPLG(deltaMorphDatas,self.vertMat,vertBuff,normBuff)
+                        deltaMorph.readMorph()                             
                 if haveSkin:
                         skin = rSkin(skinDatas,numVert,nativeFlags)
                         skin.readSkin()
